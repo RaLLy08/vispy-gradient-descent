@@ -1,4 +1,6 @@
 import os
+import shutil
+from time import sleep
 import numpy as np
 from vispy import app, scene
 from vispy.color import Color, Colormap
@@ -34,13 +36,16 @@ SAMPLES = 100
 
 os.environ['VISPY_APP_BACKEND'] = 'pyqt5'
 
-GRAPH_Z_CAMERA_OFFSET = 30
+GRAPH_Z_CAMERA_OFFSET = 23
 SPHERE_D = 20
 
 def rastrigin_3D(X, Y, A=10):
     return (X**2 - A * np.cos(2 * np.pi * X)) + (Y**2 - A * np.cos(2 * np.pi * Y))
 
-
+def ackley_3D(X, Y, A=20, B=0.2, C=2 * np.pi):
+    term1 = -A * np.exp(-B * np.sqrt(0.5 * (X**2 + Y**2)))
+    term2 = -np.exp(0.5 * (np.cos(C * X) + np.cos(C * Y)))
+    return term1 + term2 + A + np.exp(1)
 
 TRAIN_DATA_SAMPLES = 50
 
@@ -52,9 +57,10 @@ np.random.seed(41)
 noise_xyz = np.random.uniform(noise_min, noise_max, size=(TRAIN_DATA_SAMPLES, 3))
 noise_A = np.random.uniform(5, 15, size=(TRAIN_DATA_SAMPLES,))
 
-BATCH_SIZE = 5
+BATCH_SIZE = 1
 
-MAX_EPOCHS = 20
+MAX_EPOCHS = 10
+LEARNING_RATE = 0.03
 
 current_epoch = 0
 
@@ -74,6 +80,15 @@ def min_fn(x, y):
 
     return np.mean(fns, axis=0)
 
+
+x_0 = 15
+y_0 = 15
+x = x_0
+y = y_0
+
+min_z = min_fn(x_0, y_0)
+
+
 def init():
     # Generate data
     x = np.linspace(X_MIN, X_MAX, SAMPLES)
@@ -83,22 +98,22 @@ def init():
 
     # Create a canvas
     canvas = scene.SceneCanvas(keys='interactive', show=True, bgcolor='white', size=(600, 500))
-
-    fixed_bottom_title_text = ""
+    
+    fixed_left_bottom_title_text = ""
 
     if (BATCH_SIZE < TRAIN_DATA_SAMPLES):
-        fixed_bottom_title_text = "Mini-Batch Gradient Descent"
+        fixed_left_bottom_title_text = "Mini-Batch\n Gradient\n Descent"
     
     if (BATCH_SIZE == TRAIN_DATA_SAMPLES):
-        fixed_bottom_title_text = "Gradient Descent"
+        fixed_left_bottom_title_text = "Gradient\n Descent"
 
     if (BATCH_SIZE == 1):
-        fixed_bottom_title_text = "Stochastic Gradient Descent"
+        fixed_left_bottom_title_text = "Stochastic\n Gradient\n Descent"
 
-    fixed_bottom_title = scene.visuals.Text(
-        text=fixed_bottom_title_text + f" (Batch size: {BATCH_SIZE})",
+    fixed_left_bottom_title = scene.visuals.Text(
+        text=fixed_left_bottom_title_text + f" \n(Batch size: {BATCH_SIZE})\n(Samples: {TRAIN_DATA_SAMPLES})",
         color='black',
-        pos=(canvas.size[0]//2, canvas.size[1] - 40),
+        pos=(canvas.size[0]//2 - 200, canvas.size[1] - 90),
         anchor_x='center',
         anchor_y='center',
         parent=canvas.scene,
@@ -106,9 +121,9 @@ def init():
     )
 
     fixed_top_title = scene.visuals.Text(
-        text=f"Epoch: 0 | Batch: 0 - {BATCH_SIZE}",
+        text=f"Iteration: 0/{TRAIN_DATA_SAMPLES // BATCH_SIZE} | Batch: 0 - {BATCH_SIZE}\nmin f(x,y) = {min_z:.3f}",
         color='black',
-        pos=(canvas.size[0]//2, 40),
+        pos=(canvas.size[0]//2, 25),
         anchor_x='center',
         anchor_y='center',
         parent=canvas.scene,
@@ -117,9 +132,9 @@ def init():
 
     # Create a view
     view = canvas.central_widget.add_view()
-    view.camera = scene.cameras.TurntableCamera(fov=45, distance=40)
-    view.camera.azimuth = 10
-    view.camera.elevation = 50
+    view.camera = scene.cameras.TurntableCamera(fov=45, distance=50)
+    view.camera.azimuth = -19.5
+    view.camera.elevation = 18
     view.camera.center = (0, 0, GRAPH_Z_CAMERA_OFFSET)
 
     scale = (0.5, 0.5, 0.5/10)
@@ -142,18 +157,19 @@ def init():
         color=(0.5, 0.5, 1, 0.6),  # Initial color
         shading='smooth'
     )
+    surface.set_gl_state('translucent', depth_test=False)
+
     surface.transform = STTransform(translate=(0, 0, 0), scale=scale)
     view.add(surface)
-    colors[:, 3] = 0.6
+    colors[:, 3] = 0.7
     # Now apply the gradient colors to the surface
     # This is the recommended way to set vertex colors after creation
     surface.mesh_data.set_vertex_colors(colors)
     
     # Create sphere with proper scaling
-    sphere_radius = 1
+    sphere_radius = 2
     sphere_position = [x_0 * scale[0], y_0 * scale[1], min_fn(x_0, y_0) * scale[2]]
     sphere_scale = (scale[0], scale[1], scale[0])
-    
     sphere = scene.visuals.Sphere(
         radius=sphere_radius,
         color='yellow',
@@ -170,56 +186,66 @@ def init():
     trace_positions = np.array([sphere_position])
     trace = scene.visuals.Line(
         pos=trace_positions,
-        color='yellow',
+        color=(1, 1, 1, 0.6),
         width=3,
         parent=view.scene
     )
     
     # Render LaTeX as image
+    fi_explain = (
+        r"$ \nabla f(\mathbf{x}) ="
+        "\begin{bmatrix} \end{bmatrix}"
+        "$"
+    )
+
     loss_latex = fr"$ \nabla L(\mathbf{{x}}) = \frac{{1}}{{{BATCH_SIZE}}} \sum_{{i=1}}^{{{BATCH_SIZE}}} \nabla f_i(\mathbf{{x}}) $"
 
     weight_update = r"$ x_{t+1} \leftarrow x_t - \eta \cdot \nabla L(\mathbf{x_t}) $"
 
 
     # if (BATCH_SIZE < TRAIN_DATA_SAMPLES):
-    #     fixed_bottom_title_text = "Mini-Batch Gradient Descent"
+    #     fixed_left_bottom_title_text = "Mini-Batch Gradient Descent"
     
     # if (BATCH_SIZE == TRAIN_DATA_SAMPLES):
-    #     fixed_bottom_title_text = "Gradient Descent"
+    #     fixed_left_bottom_title_text = "Gradient Descent"
 
     if (BATCH_SIZE == 1):
         loss_latex = r"$ \nabla L(\mathbf{x}) = \nabla f_i(\mathbf{x}) $"
 
+    latex = loss_latex + "\n\n" + weight_update
 
-    latex_img = latex_to_image(loss_latex + "\n\n" + weight_update, dpi=300)
+    # latex_img = latex_to_image(latex, dpi=300)
 
-    # Put formula as overlay (fixed in screen space)
-    image_overlay = scene.visuals.Image(latex_img, parent=canvas.scene)
+    # # Put formula as overlay (fixed in screen space)
+    # image_overlay = scene.visuals.Image(latex_img, parent=canvas.scene)
 
-    # Position in pixels (center top, for example)
-    image_scale = 0.16
-    image_height = latex_img.shape[0] * image_scale
-    image_width = latex_img.shape[1] * image_scale
+    # # Position in pixels (center top, for example)
+    # image_scale = 0.16
+    # image_height = latex_img.shape[0] * image_scale
+    # image_width = latex_img.shape[1] * image_scale
 
-    image_overlay.transform = scene.STTransform(translate=(
-        view.size[0] - image_width  + 30, 
-        ( view.size[1] // 2) - image_height//2, 
-        0), scale=(image_scale, image_scale, image_scale))
-
-
-    return sphere, surface, scale, trace, fixed_bottom_title, fixed_top_title
+    # image_overlay.transform = scene.STTransform(translate=(
+    #     view.size[0] - image_width  + 30, 
+    #     ( view.size[1] // 2) - image_height//2 + 160, 
+    #     0), scale=(image_scale, image_scale, image_scale))
 
 
-x_0 = 15
-y_0 = 15
-x = x_0
-y = y_0
+    return view, canvas, sphere, surface, scale, trace, fixed_left_bottom_title, fixed_top_title
 
-sphere, surface, scale, trace, fixed_bottom_title, fixed_top_title = init()
+
+view, canvas, sphere, surface, scale, trace, fixed_left_bottom_title, fixed_top_title = init()
+
+# track mouse
+
+def on_mouse_move(event):
+    # view.camera.azimuth
+    print(view.camera.azimuth, view.camera.elevation, view.camera.distance)
+
+canvas.events.mouse_move.connect(on_mouse_move)
+
 
 trace_positions = [] 
 
-min_z = float('inf')
 
 def update_sphere_position(x, y, z):
     """
@@ -255,20 +281,21 @@ def update_sphere_position(x, y, z):
         min_z = np.abs(current_z)
 
     if (BATCH_SIZE < TRAIN_DATA_SAMPLES):
-        fixed_bottom_title_text = "Mini-Batch Gradient Descent"
+        fixed_left_bottom_title_text = "Mini-Batch\n Gradient\n Descent"
     
     if (BATCH_SIZE == TRAIN_DATA_SAMPLES):
-        fixed_bottom_title_text = "Gradient Descent"
+        fixed_left_bottom_title_text = "Gradient\n Descent"
 
     if (BATCH_SIZE == 1):
-        fixed_bottom_title_text = "Stochastic Gradient Descent"
+        fixed_left_bottom_title_text = "Stochastic\n Gradient\n Descent"
 
 
-    fixed_bottom_title.text = f"{fixed_bottom_title_text} (Batch size: {BATCH_SIZE})"
+
+    fixed_left_bottom_title.text = f"{fixed_left_bottom_title_text} \n(Batch size: {BATCH_SIZE})\n(Samples: {TRAIN_DATA_SAMPLES})"
 
     # Force update
     sphere.update()
-    fixed_bottom_title.update()
+    fixed_left_bottom_title.update()
 
 
 def update_surface():
@@ -297,7 +324,7 @@ def df_y(f, x, y):
     )
 
 
-def gradient_descent(lp=0.09):
+def gradient_descent(lp=0.03):
     global x, y
 
     vx = df_x(min_fn, x, y)
@@ -307,7 +334,7 @@ def gradient_descent(lp=0.09):
     y = y - vy * lp
 
 
-def frame(_):
+def frame(_=None):
     global x, y, rand_index, current_epoch
 
     if current_epoch >= MAX_EPOCHS:
@@ -316,25 +343,48 @@ def frame(_):
     if (BATCH_SIZE < TRAIN_DATA_SAMPLES):
         rand_index = np.random.randint(0, TRAIN_DATA_SAMPLES - BATCH_SIZE) 
 
-    gradient_descent(0.03)
+    update_surface()
+
+    gradient_descent(LEARNING_RATE)
+    update_sphere_position(x, y, min_fn(x, y))
+
 
     current_epoch += BATCH_SIZE / TRAIN_DATA_SAMPLES
 
     passed_batches = np.round((np.round(current_epoch, 2) % 1) * TRAIN_DATA_SAMPLES, 0).astype(int)
+    current_iter = passed_batches // BATCH_SIZE
+    max_iter = TRAIN_DATA_SAMPLES // BATCH_SIZE
 
-    fixed_top_title.text = f"min f(x,y) = {min_z:.3f} | Epoch: {int(current_epoch)}/{MAX_EPOCHS} | Batch: {passed_batches } - { passed_batches + BATCH_SIZE }"
+    # Epoch: {np.round(current_epoch, 2).astype(int)}/{MAX_EPOCHS} | 
+    fixed_top_title.text = f"Iteration: {current_iter}/{max_iter} | Batch: {passed_batches } - { passed_batches + BATCH_SIZE }\nmin f(x,y) = {min_z:.3f}"
     fixed_top_title.update()
 
 
-    update_surface()
-
-    update_sphere_position(x, y, min_fn(x, y))
 
 
+# timer = app.Timer()
+# timer.connect(frame)
+# timer.start(1/16)
 
-timer = app.Timer()
-timer.connect(frame)
-timer.start(1/16)
+# clear frames folder
+frames_dir = './frames-sgd'
+if os.path.exists(frames_dir):
+    shutil.rmtree(frames_dir)
+os.makedirs(frames_dir)
+
+total_frames = int(TRAIN_DATA_SAMPLES / BATCH_SIZE * MAX_EPOCHS)
+
+for i in range(total_frames):
+    # Update your visualization
+    # ...
+    
+    # Render and save frame
+    image = canvas.render()
+    frame()
+    plt.imsave(f'{frames_dir}/frame_{i:03d}.png', image)
+    
+    # Process events to update display
+    canvas.app.process_events()
 
 
 if __name__ == '__main__':
